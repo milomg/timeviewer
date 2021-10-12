@@ -1,0 +1,21 @@
+{
+  "name": "timeviewer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "vite",
+    "build": "vite build"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "date-fns": "^2.23.0",
+    "solid-js": "^1.1.1"
+  },
+  "devDependencies": {
+    "typescript": "^4.4.2",
+    "vite": "^2.5.1",
+    "vite-plugin-solid": "^2.0.3"
+  }
+}
