@@ -1,9 +1,4 @@
-html,
 body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
   background-color: rgb(34, 35, 39);
 }
 
@@ -15,15 +10,12 @@ body {
 svg {
   border: 1px solid #eee;
   border-radius: 4px;
-  margin: 2em auto;
+  margin: 2em auto 0 auto;
   display: block;
 }
 table {
   width: 700px;
   overflow: scroll;
   text-align: left;
-  margin: auto;
-}
-tbody {
-  display: block;
+  margin: 2em auto 0 auto;
 }
