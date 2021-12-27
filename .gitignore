@@ -2,4 +2,5 @@ xcuserdata/
 server/target
 server/tmp.db*
 client/node_modules/
+client/dist/
 .DS_Store
