@@ -7,60 +7,11 @@
 
 import Cocoa
 import ScriptingBridge
-
-class WebSocket: NSObject, URLSessionWebSocketDelegate {
-  var webSocketTask: URLSessionWebSocketTask!
-  func urlSession(
-    _ session: URLSession, webSocketTask: URLSessionWebSocketTask,
-    didOpenWithProtocol protocol: String?
-  ) {
-    self.webSocketTask = webSocketTask
-    print("Web Socket did connect")
-
-    receive()
-    self.send("HI")
-  }
-
-  func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError: Error?) {
-    print("disconnected")
-    let url = URL(string: "ws://localhost:8080")!
-    DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
-      print("reconnecting")
-      self.webSocketTask = session.webSocketTask(with: url)
-      self.webSocketTask.resume()
-    }
-  }
-
-  func receive() {
-    webSocketTask.receive { result in
-      switch result {
-      case .success(let message):
-        switch message {
-        case .data(let data):
-          print("Data received \(data)")
-        case .string(let text):
-          print("Text received \(text)")
-        }
-      case .failure(let error):
-        print("Error when receiving \(error)")
-        return
-      }
-
-      self.receive()
-    }
-  }
-
-  func send(_ str: String) {
-    webSocketTask.send(.string(str)) { error in
-      if let error = error {
-        print("Error when sending a message \(error)")
-      }
-    }
-  }
-}
+import Starscream
 
 @objc protocol TabThing {
   @objc optional var URL: String { get }
+  @objc optional var title: String { get }
 }
 
 @objc protocol WindowThing {
@@ -82,60 +33,104 @@ struct NetworkMessageThing: Codable {
   var url: String?
 }
 
-@main
-class AppDelegate: NSObject, NSApplicationDelegate {
+public func SystemIdleTime() -> Double? {
+  var iterator: io_iterator_t = 0
+  defer { IOObjectRelease(iterator) }
+  guard
+    IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("IOHIDSystem"), &iterator)
+      == KERN_SUCCESS
+  else {
+    return nil
+  }
 
+  let entry: io_registry_entry_t = IOIteratorNext(iterator)
+  defer { IOObjectRelease(entry) }
+  guard entry != 0 else { return nil }
+
+  var unmanagedDict: Unmanaged<CFMutableDictionary>? = nil
+  defer { unmanagedDict?.release() }
+  guard
+    IORegistryEntryCreateCFProperties(entry, &unmanagedDict, kCFAllocatorDefault, 0) == KERN_SUCCESS
+  else { return nil }
+  guard let dict = unmanagedDict?.takeUnretainedValue() else { return nil }
+
+  let key: CFString = "HIDIdleTime" as CFString
+  let value = CFDictionaryGetValue(dict, Unmanaged.passUnretained(key).toOpaque())
+  let number: CFNumber = unsafeBitCast(value, to: CFNumber.self)
+  var nanoseconds: Int64 = 0
+  guard CFNumberGetValue(number, CFNumberType.sInt64Type, &nanoseconds) else { return nil }
+  let interval = Double(nanoseconds) / Double(NSEC_PER_SEC)
+
+  return interval
+}
+
+@main
+class AppDelegate: NSObject, NSApplicationDelegate, WebSocketDelegate {
   var statusBarItem: NSStatusItem!
   var menuItem: NSMenuItem!
-  var oldTitle: NetworkMessageThing = NetworkMessageThing(app: "", title: "")
   var observer: AXObserver?
-  var webSocketDelegate: WebSocket!
+  var oldWindow: AXUIElement?
+  var socket: WebSocket!
+  var oldMenu: NetworkMessageThing?
+  var idle = false
+  var isConnected = false
 
-  func callback(
+  func windowTitleChanged(
     _ axObserver: AXObserver,
-    axElement: AXUIElement?,
+    axElement: AXUIElement,
     notification: CFString
   ) {
 
-    let frontmost = (NSWorkspace.shared).frontmostApplication!
-    let pid = frontmost.processIdentifier
-    let x = AXUIElementCreateApplication(pid)
-    var y: AnyObject?
-    AXUIElementCopyAttributeValue(x, kAXFocusedWindowAttribute as CFString, &y)
-
+    let frontmost = NSWorkspace.shared.frontmostApplication!
     var z: AnyObject?
-    if let window = y {
-      AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &z)
-    }
+    AXUIElementCopyAttributeValue(axElement, kAXTitleAttribute as CFString, &z)
 
     var newTitle = NetworkMessageThing(app: frontmost.localizedName!, title: z as? String ?? "")
 
-    if newTitle.app != oldTitle.app || newTitle.title != oldTitle.title {
+    menuItem.title = newTitle.app + ";" + newTitle.title
 
-      menuItem.title = newTitle.app + ";" + newTitle.title
+    if frontmost.localizedName == "Google Chrome" {
+      let chromeObject: ChromeThing = SBApplication.init(bundleIdentifier: "com.google.Chrome")!
 
-      var dontSend = false
-      if frontmost.localizedName == "Google Chrome" {
-        let chromeObject: ChromeThing = SBApplication.init(bundleIdentifier: "com.google.Chrome")!
+      let f = chromeObject.windows!()[0]
+      let t = f.activeTab!
 
-        let f = chromeObject.windows!()[0]
-        let t = f.activeTab!
-
-        if f.mode == "incognito" { dontSend = true }
+      if f.mode == "incognito" {
+        newTitle = NetworkMessageThing(app: "", title: "")
+      } else {
         newTitle.url = t.URL
+        if let title = t.title { newTitle.title = title }
       }
-
-      let jsonEncoder = JSONEncoder()
-      let jsonData = try! jsonEncoder.encode(
-        dontSend ? NetworkMessageThing(app: "", title: "") : newTitle)
-      let json = String(data: jsonData, encoding: String.Encoding.utf8)
-      print(json)
-      webSocketDelegate.send(json ?? "")
-      oldTitle = newTitle
     }
+
+    self.sendMessage(message: newTitle)
+    oldMenu = newTitle
   }
 
-  @objc private func asdf(notification: NSNotification) {
+  func sendMessage(message: NetworkMessageThing) {
+    guard isConnected else { return }
+    let jsonEncoder = JSONEncoder()
+    let jsonData = try! jsonEncoder.encode(message)
+    guard let json = String(data: jsonData, encoding: String.Encoding.utf8) else { return }
+    print(json)
+    socket.write(string: json)
+  }
+  @objc private func focusedWindowChanged(_ observer: AXObserver, window: AXUIElement) {
+    if oldWindow != nil {
+      AXObserverRemoveNotification(
+        observer, oldWindow!, kAXFocusedWindowChangedNotification as CFString)
+    }
+
+    let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+    AXObserverAddNotification(observer, window, kAXTitleChangedNotification as CFString, selfPtr)
+
+    windowTitleChanged(
+      observer, axElement: window, notification: kAXTitleChangedNotification as CFString)
+
+    oldWindow = window
+  }
+
+  @objc private func focusedAppChanged() {
     if observer != nil {
       CFRunLoopRemoveSource(
         RunLoop.current.getCFRunLoop(),
@@ -143,9 +138,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         CFRunLoopMode.defaultMode)
     }
 
-    let frontmost = (notification.object as! NSWorkspace).frontmostApplication!
+    let frontmost = NSWorkspace.shared.frontmostApplication!
     let pid = frontmost.processIdentifier
-
     let x = AXUIElementCreateApplication(pid)
 
     AXObserverCreate(
@@ -162,30 +156,64 @@ class AppDelegate: NSObject, NSApplicationDelegate {
           return
         }
         let application = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
-        application.callback(axObserver, axElement: axElement, notification: notification)
+        if notification == kAXFocusedWindowChangedNotification as CFString {
+          application.focusedWindowChanged(axObserver, window: axElement)
+        } else {
+          application.windowTitleChanged(
+            axObserver, axElement: axElement, notification: notification)
+        }
       }, &observer)
 
     let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-    AXObserverAddNotification(observer!, x, kAXTitleChangedNotification as CFString, selfPtr)
+    AXObserverAddNotification(
+      observer!, x, kAXFocusedWindowChangedNotification as CFString, selfPtr)
 
     CFRunLoopAddSource(
       RunLoop.current.getCFRunLoop(),
       AXObserverGetRunLoopSource(observer!),
       CFRunLoopMode.defaultMode)
 
-    callback(observer!, axElement: nil, notification: kAXTitleChangedNotification as CFString)
+    var focusedWindow: AnyObject?
+    AXUIElementCopyAttributeValue(x, kAXFocusedWindowAttribute as CFString, &focusedWindow)
+
+    if focusedWindow != nil {
+      focusedWindowChanged(observer!, window: focusedWindow as! AXUIElement)
+    }
   }
 
-  func tmp() {
-    webSocketDelegate = WebSocket()
-    let session = URLSession(
-      configuration: .default, delegate: webSocketDelegate, delegateQueue: OperationQueue())
-    let url = URL(string: "ws://localhost:8080")!
-    session.webSocketTask(with: url).resume()
+  func didReceive(event: WebSocketEvent, client: WebSocket) {
+    switch event {
+    case .connected(let headers):
+      print("websocket is connected: \(headers)")
+      self.isConnected = true
+      socket.write(string: "HI")
+    case .disconnected(_, _):
+      print("websocket is disconnected")
+      DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+        print("reconnecting")
+        self.isConnected = false
+        self.reconnect()
+      }
+    case .text(let string):
+      print("Received text: \(string)")
+    case .binary(let data):
+      print("Received data: \(data.count)")
+    default:
+      break
+    }
+  }
 
-    NSWorkspace.shared.notificationCenter.addObserver(
-      self, selector: #selector(self.asdf), name: NSWorkspace.didActivateApplicationNotification,
-      object: nil)
+  func reconnect() {
+    if isConnected { return }
+
+    let request = URLRequest(url: URL(string: "ws://localhost:8080")!, timeoutInterval: 5)
+    self.socket = WebSocket(request: request)
+    self.socket.delegate = self
+    self.socket.connect()
+    isConnected = false
+    DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
+      self.reconnect()
+    }
   }
 
   func applicationDidFinishLaunching(_ aNotification: Notification) {
@@ -193,12 +221,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     statusBarItem.button?.title = "👁"
 
-    let statusBarMenu = NSMenu(title: "Cap Status Bar Menu")
+    let statusBarMenu = NSMenu(title: "TimeViewer Status Bar Menu")
     statusBarMenu.autoenablesItems = false
     statusBarItem.menu = statusBarMenu
 
     menuItem = statusBarMenu.addItem(
-      withTitle: "TimeViewer/Magic", action: #selector(AppDelegate.onClick),
+      withTitle: "TimeViewer;Magic", action: nil,
       keyEquivalent: "")
     menuItem.isEnabled = false
 
@@ -207,11 +235,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       action: #selector(AppDelegate.quit),
       keyEquivalent: "")
 
-    tmp()
+    self.reconnect()
+
+    NSWorkspace.shared.notificationCenter.addObserver(
+      self, selector: #selector(self.focusedAppChanged),
+      name: NSWorkspace.didActivateApplicationNotification,
+      object: nil)
+    self.focusedAppChanged()
+    self.detectIdle()
   }
 
-  @objc func onClick() {
-    print("Doing something!")
+  func detectIdle() {
+    let seconds = 15.0 - SystemIdleTime()!
+    if seconds < 0.0 {
+      self.sendMessage(message: NetworkMessageThing(app: "", title: ""))
+
+      var monitor: Any?
+      monitor = NSEvent.addGlobalMonitorForEvents(matching: [
+        .mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown,
+      ]) { e in
+        NSEvent.removeMonitor(monitor!)
+        if let oldMenu = self.oldMenu { self.sendMessage(message: oldMenu) }
+        self.detectIdle()
+      }
+
+      return
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+      self.detectIdle()
+    }
   }
 
   @objc func quit() {

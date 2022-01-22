@@ -1,4 +1,5 @@
 xcuserdata/
+monitor/DerivedData/
 server/target
 server/tmp.db*
 client/node_modules/

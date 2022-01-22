@@ -3,10 +3,11 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 50;
+	objectVersion = 52;
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2678161B279678A300528D58 /* Starscream in Frameworks */ = {isa = PBXBuildFile; productRef = 2678161A279678A300528D58 /* Starscream */; };
 		268164A126DB021D0094D516 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 268164A026DB021D0094D516 /* AppDelegate.swift */; };
 		268164A526DB021E0094D516 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 268164A426DB021E0094D516 /* Assets.xcassets */; };
 		26CDB9AB26DB32DB00991C4B /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 26CDB9AA26DB32DB00991C4B /* Main.storyboard */; };
@@ -27,6 +28,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2678161B279678A300528D58 /* Starscream in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -78,6 +80,9 @@
 			dependencies = (
 			);
 			name = TimeViewer;
+			packageProductDependencies = (
+				2678161A279678A300528D58 /* Starscream */,
+			);
 			productName = TimeViewer;
 			productReference = 2681649D26DB021D0094D516 /* TimeViewer.app */;
 			productType = "com.apple.product-type.application";
@@ -105,6 +110,9 @@
 				Base,
 			);
 			mainGroup = 2681649426DB021D0094D516;
+			packageReferences = (
+				26781619279678A300528D58 /* XCRemoteSwiftPackageReference "Starscream" */,
+			);
 			productRefGroup = 2681649E26DB021D0094D516 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -270,7 +278,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 10.15;
+				MACOSX_DEPLOYMENT_TARGET = 10.13;
 				PRODUCT_BUNDLE_IDENTIFIER = edu.milo.TimeViewer;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
@@ -294,7 +302,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 10.15;
+				MACOSX_DEPLOYMENT_TARGET = 10.13;
 				PRODUCT_BUNDLE_IDENTIFIER = edu.milo.TimeViewer;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
@@ -323,6 +331,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		26781619279678A300528D58 /* XCRemoteSwiftPackageReference "Starscream" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/daltoniam/Starscream.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.0.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2678161A279678A300528D58 /* Starscream */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 26781619279678A300528D58 /* XCRemoteSwiftPackageReference "Starscream" */;
+			productName = Starscream;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2681649526DB021D0094D516 /* Project object */;
 }

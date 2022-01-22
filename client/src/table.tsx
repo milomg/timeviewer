@@ -37,13 +37,19 @@ const tableStyles = css({
   textAlign: "left",
 });
 
+const tableGroupStyles = css({
+  gap: "2rem",
+  display: "flex",
+  flexDirection: "column",
+});
+
 export const Table: Component<{ timelist: TimeThing[] }> = (props) => {
   const [slowMillis, setSlowMillis] = createSignal(Date.now());
   const interval = setInterval(() => setSlowMillis(Date.now()), 1000);
   onCleanup(() => window.clearInterval(interval));
 
   let reduceToObject = (mapper: (x: TimeThing) => string | undefined) => {
-    let initialMemo = createMemo<{
+    const initialMemo = createMemo<{
       [site: string]: {
         mapped: string;
         time: () => number;
@@ -53,15 +59,14 @@ export const Table: Component<{ timelist: TimeThing[] }> = (props) => {
     }>((obj) => {
       for (const item in obj) obj[item].add = 0;
       for (const s of props.timelist) {
-        let mapped = mapper(s);
+        const mapped = mapper(s);
         if (!mapped) continue;
         if (!obj[mapped]) {
-          let [time, setTime] = createSignal(0);
+          const [time, setTime] = createSignal(0);
           obj[mapped] = { mapped, time, setTime, add: 0 };
         }
         if (!s.endtime) continue;
-        obj[mapped].add +=
-          new Date(s.endtime).getTime() - new Date(s.starttime).getTime();
+        obj[mapped].add += s.endtime - s.starttime;
       }
       batch(() => {
         for (const site in obj) obj[site].setTime(obj[site].add);
@@ -73,68 +78,81 @@ export const Table: Component<{ timelist: TimeThing[] }> = (props) => {
     return () => {
       const sites = initialMemo();
 
-      let s = props.timelist[props.timelist.length - 1];
+      const s = props.timelist[props.timelist.length - 1];
       if (s) {
-        let url = mapper(s);
+        const url = mapper(s);
         if (url)
           sites[url].setTime(
             sites[url].add +
-              (s.endtime ? new Date(s.endtime).getTime() : slowMillis()) -
-              new Date(s.starttime).getTime()
+              (s.endtime ? s.endtime : slowMillis()) -
+              s.starttime
           );
       }
       return Object.values(sites).sort((a, b) => b.time() - a.time());
     };
   };
 
-  let obj = reduceToObject((s) => s && s.url && new URL(s.url).hostname);
+  const websiteObj = reduceToObject(
+    (s) => s && s.url && new URL(s.url).hostname
+  );
+  const appObj = reduceToObject((s) => s && s.app);
 
-  let appObj = reduceToObject((s) => s && s.app);
+  let currentName = () => {
+    let current = props.timelist[props.timelist.length - 1];
+    return (
+      current &&
+      (current.url ? new URL(current.url).hostname : current.app || "Idle")
+    );
+  };
 
   return (
     <>
-      <table class={tableStyles}>
-        <colgroup>
-          <col style="width:80px" />
-          <col />
-        </colgroup>
-        <thead>
-          <tr>
-            <th colSpan="2">Websites</th>
-          </tr>
-        </thead>
-        <tbody>
-          <For each={obj()}>
-            {(y) => (
-              <tr>
-                <td>{millistoduration(y.time())}</td>
-                <td>{y.mapped}</td>
-              </tr>
-            )}
-          </For>
-        </tbody>
-      </table>
-      <table class={tableStyles}>
-        <colgroup>
-          <col style="width:80px" />
-          <col />
-        </colgroup>
-        <thead>
-          <tr>
-            <th colSpan="2">Apps</th>
-          </tr>
-        </thead>
-        <tbody>
-          <For each={appObj()}>
-            {(y) => (
-              <tr>
-                <td>{millistoduration(y.time())}</td>
-                <td>{y.mapped}</td>
-              </tr>
-            )}
-          </For>
-        </tbody>
-      </table>
+      <h1>You are going to be productive today</h1>
+      <p>You are currently on: {currentName()}</p>
+      <div class={tableGroupStyles}>
+        <table class={tableStyles}>
+          <colgroup>
+            <col style="width:80px" />
+            <col />
+          </colgroup>
+          <thead>
+            <tr>
+              <th colSpan="2">Websites</th>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={websiteObj()}>
+              {(y) => (
+                <tr>
+                  <td>{millistoduration(y.time())}</td>
+                  <td>{y.mapped}</td>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+        <table class={tableStyles}>
+          <colgroup>
+            <col style="width:80px" />
+            <col />
+          </colgroup>
+          <thead>
+            <tr>
+              <th colSpan="2">Apps</th>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={appObj()}>
+              {(y) => (
+                <tr>
+                  <td>{millistoduration(y.time())}</td>
+                  <td>{y.mapped}</td>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </div>
     </>
   );
 };

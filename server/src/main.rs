@@ -128,8 +128,8 @@ async fn accept_connection(stream: TcpStream, pool: Pool<Sqlite>, tx: Sender<Str
     } else {
         let mut rx = tx.subscribe();
 
-        let asdf = Local::now();
-        let hour = (Local::now().with_hour(8).unwrap().with_minute(0).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap()).to_rfc3339();
+        let asdf = Local::now().with_hour(8).unwrap().with_minute(0).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap();
+        let hour = asdf.to_rfc3339();
         dbg!(&hour);
         let last_hour = sqlx::query_as!(
             TimeEvent,

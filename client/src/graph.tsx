@@ -42,6 +42,9 @@ export const Graph: Component<{ timelist: TimeThing[] }> = (props) => {
   animate();
   onCleanup(() => window.cancelAnimationFrame(animationFrame));
 
+  const round = (x: number) => Math.round(x * 10) / 10;
+  const transform = (x: number) => (x * svgWidth * zoom()) / (1000 * 60 * 60);
+
   return (
     <svg
       width={svgWidth}
@@ -65,32 +68,18 @@ export const Graph: Component<{ timelist: TimeThing[] }> = (props) => {
       }}
     >
       <g
-        transform={`translate(${
-          Math.round(
-            (((startOfDay - currentMillis()) * svgWidth * zoom()) /
-              (1000 * 60 * 60) +
-              translate()) *
-              10
-          ) / 10
-        },0)`}
+        transform={`translate(${round(
+          transform(startOfDay - currentMillis()) + translate()
+        )},0)`}
       >
         <g>
           <For each={props.timelist}>
             {(el) => {
-              const round = (x: number) => Math.round(x * 10) / 10;
-              const transform = (x: number) =>
-                (x * svgWidth * zoom()) / (1000 * 60 * 60);
-
-              let startPos = () =>
-                round(transform(new Date(el.starttime).getTime() - startOfDay));
+              let startPos = () => round(transform(el.starttime - startOfDay));
 
               let width = () =>
                 round(
-                  transform(
-                    (el.endtime
-                      ? new Date(el.endtime).getTime()
-                      : currentMillis()) - new Date(el.starttime).getTime()
-                  )
+                  transform((el.endtime ?? currentMillis()) - el.starttime)
                 );
               let fill = `hsl(${hashcode(el.title) % 360},100%,80%)`;
               let border = `hsl(${hashcode(el.app) % 360},100%,40%)`;
@@ -98,12 +87,8 @@ export const Graph: Component<{ timelist: TimeThing[] }> = (props) => {
               return (
                 <Show
                   when={
-                    !el.endtime ||
-                    transform(
-                      new Date(el.endtime).getTime() -
-                        currentMillis() +
-                        1000 * 60 * 60
-                    ) +
+                    el.endtime == undefined ||
+                    transform(el.endtime - currentMillis()) +
                       translate() >
                       0
                   }
@@ -112,11 +97,11 @@ export const Graph: Component<{ timelist: TimeThing[] }> = (props) => {
                     <rect fill={fill} width={width()} height="80" />
                     <rect fill={border} width={width()} height="10" y={80} />
                     <foreignObject x="0" y="0" width={width()} height="90">
-                      <div style="width:100%; height:100%; color: black; white-space: nowrap; pointer-events: none; overflow: hidden;">
-                        <div style="text-overflow: ellipsis; overflow: hidden; font-size: 35px">
+                      <div style="width:100%; height:100%; color: black; white-space: nowrap; pointer-events: none; overflow: hidden; contain: strict;">
+                        <div style="font-size: 35px">
                           {el.app}
                         </div>
-                        <div style="text-overflow: ellipsis; overflow: hidden; font-size: 15px">
+                        <div style="font-size: 15px">
                           {el.title}
                         </div>
                       </div>

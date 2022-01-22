@@ -1,6 +1,6 @@
 export type TimeThing = {
-  starttime: string;
-  endtime?: string;
+  starttime: number;
+  endtime?: number;
   app: string;
   url?: string;
   title: string;
