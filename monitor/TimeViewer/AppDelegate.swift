@@ -186,7 +186,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, WebSocketDelegate {
     case .connected(let headers):
       print("websocket is connected: \(headers)")
       self.isConnected = true
-      socket.write(string: "HI")
     case .disconnected(_, _):
       print("websocket is disconnected")
       DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
@@ -206,7 +205,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WebSocketDelegate {
   func reconnect() {
     if isConnected { return }
 
-    let request = URLRequest(url: URL(string: "ws://localhost:8080")!, timeoutInterval: 5)
+    let request = URLRequest(url: URL(string: "ws://localhost:5168/server")!, timeoutInterval: 5)
     self.socket = WebSocket(request: request)
     self.socket.delegate = self
     self.socket.connect()

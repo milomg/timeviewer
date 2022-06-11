@@ -1,15 +1,20 @@
+use anyhow::Result;
+use axum::{
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, get_service},
+    Extension, Router,
+};
 use chrono::prelude::*;
-use chrono::Duration;
-use futures_util::{SinkExt, StreamExt};
+use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
-use std::{env, io::Error};
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::broadcast::{self, Sender},
-};
-use tokio_tungstenite::tungstenite::Message;
+use std::net::SocketAddr;
+use tokio::sync::broadcast::{self, Sender};
+use tower_http::{services::ServeDir, trace::TraceLayer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct TimeEvent {
@@ -28,129 +33,162 @@ struct NetworkMessageThing {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
-    let addr = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:8080".to_string());
+async fn main() -> Result<()> {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "timeviewer=debug,tower_http=debug".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
-    let pool = SqlitePoolOptions::new()
-        .connect("sqlite:tmp.db")
-        .await
-        .expect("failed to open db");
-    sqlx::migrate!()
-        .run(&pool)
-        .await
-        .expect("failed to run migrations");
+    let addr = SocketAddr::from(([127, 0, 0, 1], 5168));
+
+    let pool = SqlitePoolOptions::new().connect("sqlite:tmp.db").await?;
+    sqlx::migrate!().run(&pool).await?;
 
     let (tx, _) = broadcast::channel::<String>(16);
     // Create the event loop and TCP listener we'll accept connections on.
-    let listener = TcpListener::bind(&addr).await.expect("Failed to bind");
-    println!("Listening on: {}", addr);
+    let app = Router::new()
+        .fallback(
+            get_service(ServeDir::new("public").append_index_html_on_directories(true))
+                .handle_error(|error: std::io::Error| async move {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Unhandled internal error: {}", error),
+                    )
+                }),
+        )
+        .route("/client", get(client_ws_handler))
+        .route("/server", get(server_ws_handler))
+        .layer(Extension((tx, pool)))
+        .layer(TraceLayer::new_for_http());
 
-    while let Ok((stream, _)) = listener.accept().await {
-        tokio::spawn(accept_connection(stream, pool.clone(), tx.clone()));
-    }
+    println!("Listening on: {}", addr);
+    axum::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .await?;
 
     Ok(())
 }
 
-async fn accept_connection(stream: TcpStream, pool: Pool<Sqlite>, tx: Sender<String>) {
-    let ws_stream = tokio_tungstenite::accept_async(stream)
-        .await
-        .expect("Error during the websocket handshake occurred");
-
-    let (mut write, mut read) = ws_stream.split();
-
-    let first_message = read.next().await.unwrap().unwrap().into_text().unwrap();
-    if let "HI" = first_message.as_str() {
-        let mut last_time: Option<String> = None;
-        while let Some(msg) = read.next().await {
-            if let Ok(Message::Text(str)) = msg {
-                if let Some(time) = &last_time {
-                    let new_time = Utc::now().to_rfc3339();
-                    sqlx::query!(
-                        "UPDATE times SET endtime = ? WHERE starttime = ?",
-                        new_time,
-                        time
-                    )
-                    .execute(&pool)
-                    .await
-                    .expect("updating failed");
-                }
-
-                let starttime = Utc::now().to_rfc3339();
-                let NetworkMessageThing {
-                    app,
-                    title,
-                    url
-                } = serde_json::from_str(&str).unwrap();
-
-                let _ = tx.send(
-                    json!({
-                        "app": app,
-                        "title": title,
-                        "url": url,
-                        "starttime": starttime
-                    })
-                    .to_string(),
-                );
-
-                if app == "" {
-                    last_time = None
-                } else {
-                    sqlx::query!(
-                        "INSERT INTO times (app, title, url, starttime) VALUES (?, ?, ?, ?)",
-                        app,
-                        title,
-                        url,
-                        starttime
-                    )
-                    .execute(&pool)
-                    .await
-                    .expect("inserting failed");
-
-                    last_time = Some(starttime);
-                }
-            }
-        }
-
-        if let Some(time) = &last_time {
-            let new_time = Utc::now().to_rfc3339();
-            sqlx::query!(
-                "UPDATE times SET endtime = ? WHERE starttime = ?",
-                new_time,
-                time
-            )
-            .execute(&pool)
+async fn client_ws_handler(
+    ws: WebSocketUpgrade,
+    Extension((tx, pool)): Extension<(Sender<String>, Pool<Sqlite>)>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| async move {
+        accept_client_connection(socket, pool.clone(), tx.clone())
             .await
-            .expect("updating failed");
-        }
-    } else {
-        let mut rx = tx.subscribe();
+            .unwrap()
+    })
+}
 
-        let asdf = Local::now().with_hour(8).unwrap().with_minute(0).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap();
-        let hour = asdf.to_rfc3339();
-        dbg!(&hour);
-        let last_hour = sqlx::query_as!(
+async fn server_ws_handler(
+    ws: WebSocketUpgrade,
+    Extension((tx, pool)): Extension<(Sender<String>, Pool<Sqlite>)>,
+) -> impl IntoResponse {
+    ws.on_upgrade(|socket| async move {
+        accept_server_connection(socket, pool.clone(), tx.clone())
+            .await
+            .unwrap()
+    })
+}
+
+async fn accept_client_connection(
+    mut stream: WebSocket,
+    pool: Pool<Sqlite>,
+    tx: Sender<String>,
+) -> Result<()> {
+    let mut rx = tx.subscribe();
+
+    let asdf = Local::now()
+        .with_hour(8)
+        .unwrap()
+        .with_minute(0)
+        .unwrap()
+        .with_second(0)
+        .unwrap()
+        .with_nanosecond(0)
+        .unwrap();
+    let hour = asdf.to_rfc3339();
+
+    let last_hour = sqlx::query_as!(
             TimeEvent,
             "SELECT * FROM times WHERE datetime(endtime) > datetime(?) or endtime IS NULL ORDER BY starttime",
             hour
         )
         .fetch_all(&pool)
-        .await
-        .expect("querying failed");
+        .await?;
 
-        let stringified = serde_json::to_string(&last_hour).expect("stringifying failed");
-        write
-            .send(Message::text(stringified))
-            .await
-            .expect("sending initial message failed");
+    let stringified = serde_json::to_string(&last_hour).expect("stringifying failed");
+    stream.send(Message::Text(stringified)).await?;
 
-        while let Ok(data) = rx.recv().await {
-            write
-                .send(Message::text(data))
-                .await
-                .expect("sending a message didn't work");
+    while let Ok(data) = rx.recv().await {
+        stream.send(Message::Text(data)).await?;
+    }
+
+    Ok(())
+}
+
+async fn accept_server_connection(
+    mut stream: WebSocket,
+    pool: Pool<Sqlite>,
+    tx: Sender<String>,
+) -> Result<()> {
+    let mut last_time: Option<String> = None;
+    while let Some(msg) = stream.next().await {
+        if let Ok(Message::Text(str)) = msg {
+            if let Some(time) = &last_time {
+                let new_time = Utc::now().to_rfc3339();
+                sqlx::query!(
+                    "UPDATE times SET endtime = ? WHERE starttime = ?",
+                    new_time,
+                    time
+                )
+                .execute(&pool)
+                .await?;
+            }
+
+            let starttime = Utc::now().to_rfc3339();
+            let NetworkMessageThing { app, title, url } = serde_json::from_str(&str).unwrap();
+
+            let _ = tx.send(
+                json!({
+                    "app": app,
+                    "title": title,
+                    "url": url,
+                    "starttime": starttime
+                })
+                .to_string(),
+            );
+
+            if app == "" {
+                last_time = None
+            } else {
+                sqlx::query!(
+                    "INSERT INTO times (app, title, url, starttime) VALUES (?, ?, ?, ?)",
+                    app,
+                    title,
+                    url,
+                    starttime
+                )
+                .execute(&pool)
+                .await?;
+
+                last_time = Some(starttime);
+            }
         }
     }
+
+    if let Some(time) = &last_time {
+        let new_time = Utc::now().to_rfc3339();
+        sqlx::query!(
+            "UPDATE times SET endtime = ? WHERE starttime = ?",
+            new_time,
+            time
+        )
+        .execute(&pool)
+        .await?;
+    }
+
+    Ok(())
 }

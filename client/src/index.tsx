@@ -34,7 +34,6 @@ const mainStyles = css({
 const navStyles = css({
   backgroundColor: "rgb(7 27 46)",
   position: "sticky",
-  width: "100%",
   top: 0,
   height: "4rem",
   borderBottom: "1px solid #eee",
@@ -67,10 +66,7 @@ const App = () => {
 
   let ws: WebSocket;
   const setup = () => {
-    ws = new WebSocket("ws://localhost:8080");
-    ws.onopen = () => {
-      ws.send("client");
-    };
+    ws = new WebSocket(`ws://${location.host}/client`);
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data, (key, value) => {
         if (key === "starttime" || (key === "endtime" && value != undefined)) {
