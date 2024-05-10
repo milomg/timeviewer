@@ -181,7 +181,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WebSocketDelegate {
     }
   }
 
-  func didReceive(event: WebSocketEvent, client: WebSocket) {
+  func didReceive(event: WebSocketEvent, client: any WebSocketClient) {
     switch event {
     case .connected(let headers):
       print("websocket is connected: \(headers)")
@@ -235,6 +235,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, WebSocketDelegate {
       keyEquivalent: "")
 
     self.reconnect()
+
+    let checkOptPrompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
+
+    if !AXIsProcessTrustedWithOptions([checkOptPrompt: true] as CFDictionary) {
+      let alert = NSAlert()
+      alert.messageText = "You have not given accessibility permissions"
+      alert.addButton(withTitle: "OK")
+      alert.alertStyle = .warning
+      alert.runModal()
+    }
 
     NSWorkspace.shared.notificationCenter.addObserver(
       self, selector: #selector(self.focusedAppChanged),

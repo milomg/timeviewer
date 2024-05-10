@@ -5,9 +5,10 @@ import {
   createSignal,
   For,
   onCleanup,
+  useContext,
 } from "solid-js";
 import { css } from "solid-styled-components";
-import type { TimeThing } from "./types";
+import { TimeListContext, TimeThing } from "./timelist";
 
 const millistoduration = (millis: number): string => {
   if (millis < 1000) {
@@ -43,7 +44,8 @@ const tableGroupStyles = css({
   flexDirection: "column",
 });
 
-export const Table: Component<{ timelist: TimeThing[] }> = (props) => {
+export const Table: Component = () => {
+  const timeList = useContext(TimeListContext);
   const [slowMillis, setSlowMillis] = createSignal(Date.now());
   const interval = setInterval(() => setSlowMillis(Date.now()), 1000);
   onCleanup(() => window.clearInterval(interval));
@@ -58,7 +60,7 @@ export const Table: Component<{ timelist: TimeThing[] }> = (props) => {
       };
     }>((obj) => {
       for (const item in obj) obj[item].add = 0;
-      for (const s of props.timelist) {
+      for (const s of timeList()) {
         const mapped = mapper(s);
         if (!mapped) continue;
         if (!obj[mapped]) {
@@ -78,14 +80,14 @@ export const Table: Component<{ timelist: TimeThing[] }> = (props) => {
     return () => {
       const sites = initialMemo();
 
-      const s = props.timelist[props.timelist.length - 1];
+      const s = timeList()[timeList().length - 1];
       if (s) {
         const url = mapper(s);
         if (url)
           sites[url].setTime(
             sites[url].add +
               (s.endtime ? s.endtime : slowMillis()) -
-              s.starttime
+              s.starttime,
           );
       }
       return Object.values(sites).sort((a, b) => b.time() - a.time());
@@ -93,12 +95,12 @@ export const Table: Component<{ timelist: TimeThing[] }> = (props) => {
   };
 
   const websiteObj = reduceToObject(
-    (s) => s && s.url && new URL(s.url).hostname
+    (s) => s && s.url && new URL(s.url).hostname,
   );
   const appObj = reduceToObject((s) => s && s.app);
 
   let currentName = () => {
-    let current = props.timelist[props.timelist.length - 1];
+    let current = timeList()[timeList().length - 1];
     return (
       current &&
       (current.url ? new URL(current.url).hostname : current.app || "Idle")

@@ -1,11 +1,11 @@
 import { createGlobalStyles, css } from "solid-styled-components";
 import { render } from "solid-js/web";
-import { createSignal } from "solid-js";
+import { ParentComponent, createSignal } from "solid-js";
 import { Graph } from "./graph";
-import { Link, Route, Router, Routes } from "solid-app-router";
+import { A, Route, Router } from "@solidjs/router";
 import { Table } from "./table";
 
-import type { TimeThing } from "./types";
+import { type TimeThing, TimeListContext } from "./timelist";
 
 const bg = "rgb(0 30 61)";
 const Styles = createGlobalStyles`
@@ -48,9 +48,9 @@ const navStyles = css({
     padding: "0 1rem",
     borderRadius: "8px",
     "&:hover": {
-      background: "rgba(19, 47, 76, 0.4)"
-    }
-  }
+      background: "rgba(19, 47, 76, 0.4)",
+    },
+  },
 });
 
 const logoStyles = css({
@@ -61,7 +61,7 @@ const logoStyles = css({
   verticalAlign: "middle",
 });
 
-const App = () => {
+const App: ParentComponent = (props) => {
   let [timeList, setTimeList] = createSignal<TimeThing[]>([]);
 
   let ws: WebSocket;
@@ -93,16 +93,15 @@ const App = () => {
     <div class={appStyles}>
       <Styles />
       <nav class={navStyles}>
-        <Link href="/">
-        <span class={logoStyles}>👁</span>TimeViewer
-        </Link>
-        <Link href="/graph">Graph</Link>
+        <A href="/">
+          <span class={logoStyles}>👁</span>TimeViewer
+        </A>
+        <A href="/graph">Graph</A>
       </nav>
       <div class={mainStyles}>
-        <Routes>
-          <Route path="/graph" element={<Graph timelist={timeList()} />} />
-          <Route path="/" element={<Table timelist={timeList()} />} />
-        </Routes>
+        <TimeListContext.Provider value={timeList}>
+          {props.children}
+        </TimeListContext.Provider>
       </div>
     </div>
   );
@@ -110,9 +109,10 @@ const App = () => {
 
 render(
   () => (
-    <Router>
-      <App />
+    <Router root={App}>
+      <Route path="/graph" component={Graph} />
+      <Route path="/" component={Table} />
     </Router>
   ),
-  document.getElementById("root")!
+  document.getElementById("root")!,
 );

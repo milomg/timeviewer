@@ -1,6 +1,13 @@
-import { Component, createSignal, For, onCleanup, Show } from "solid-js";
+import {
+  Component,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+  useContext,
+} from "solid-js";
 import { css } from "solid-styled-components";
-import type { TimeThing } from "./types";
+import { TimeListContext } from "./timelist";
 
 function hashcode(str: string): number {
   let hash = 0;
@@ -22,13 +29,15 @@ const graphStyles = css({
 });
 
 const svgWidth = 700;
-export const Graph: Component<{ timelist: TimeThing[] }> = (props) => {
+export const Graph: Component = () => {
+  const timeList = useContext(TimeListContext);
+
   const [translate, setTranslate] = createSignal(svgWidth / 2);
   const [zoom, setZoom] = createSignal(1);
 
   const ticks = () => {
     return [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].map(
-      (x) => new Date().setHours(x, 0, 0, 0)
+      (x) => new Date().setHours(x, 0, 0, 0),
     );
   };
 
@@ -55,10 +64,10 @@ export const Graph: Component<{ timelist: TimeThing[] }> = (props) => {
           let oldZoom = zoom();
           let newZoom = Math.max(
             Math.min(oldZoom * Math.pow(2, e.deltaY * -0.1), 10 * 60),
-            1
+            1,
           );
           setTranslate(
-            (newZoom / oldZoom) * (translate() - e.offsetX) + e.offsetX
+            (newZoom / oldZoom) * (translate() - e.offsetX) + e.offsetX,
           );
           setZoom(newZoom);
         } else {
@@ -69,17 +78,17 @@ export const Graph: Component<{ timelist: TimeThing[] }> = (props) => {
     >
       <g
         transform={`translate(${round(
-          transform(startOfDay - currentMillis()) + translate()
+          transform(startOfDay - currentMillis()) + translate(),
         )},0)`}
       >
         <g>
-          <For each={props.timelist}>
+          <For each={timeList()}>
             {(el) => {
               let startPos = () => round(transform(el.starttime - startOfDay));
 
               let width = () =>
                 round(
-                  transform((el.endtime ?? currentMillis()) - el.starttime)
+                  transform((el.endtime ?? currentMillis()) - el.starttime),
                 );
               let fill = `hsl(${hashcode(el.title) % 360},100%,80%)`;
               let border = `hsl(${hashcode(el.app) % 360},100%,40%)`;
@@ -88,9 +97,7 @@ export const Graph: Component<{ timelist: TimeThing[] }> = (props) => {
                 <Show
                   when={
                     el.endtime == undefined ||
-                    transform(el.endtime - currentMillis()) +
-                      translate() >
-                      0
+                    transform(el.endtime - currentMillis()) + translate() > 0
                   }
                 >
                   <g transform={`translate(${startPos()},0)`}>
@@ -98,12 +105,8 @@ export const Graph: Component<{ timelist: TimeThing[] }> = (props) => {
                     <rect fill={border} width={width()} height="10" y={80} />
                     <foreignObject x="0" y="0" width={width()} height="90">
                       <div style="width:100%; height:100%; color: black; white-space: nowrap; pointer-events: none; overflow: hidden; contain: strict;">
-                        <div style="font-size: 35px">
-                          {el.app}
-                        </div>
-                        <div style="font-size: 15px">
-                          {el.title}
-                        </div>
+                        <div style="font-size: 35px">{el.app}</div>
+                        <div style="font-size: 15px">{el.title}</div>
                       </div>
                     </foreignObject>
                   </g>

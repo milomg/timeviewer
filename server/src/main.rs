@@ -1,9 +1,10 @@
 use anyhow::Result;
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    handler::HandlerWithoutStateExt,
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, get_service},
+    routing::get,
     Extension, Router,
 };
 use chrono::prelude::*;
@@ -36,7 +37,8 @@ struct NetworkMessageThing {
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "timeviewer=debug,tower_http=debug".into()),
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "timeviewer=debug,tower_http=debug".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -48,25 +50,25 @@ async fn main() -> Result<()> {
 
     let (tx, _) = broadcast::channel::<String>(16);
     // Create the event loop and TCP listener we'll accept connections on.
+
+    async fn handle_404() -> (StatusCode, &'static str) {
+        (StatusCode::NOT_FOUND, "Not found")
+    }
+
+    let serve_dir = ServeDir::new("public")
+        .append_index_html_on_directories(true)
+        .not_found_service(handle_404.into_service());
     let app = Router::new()
-        .fallback(
-            get_service(ServeDir::new("public").append_index_html_on_directories(true))
-                .handle_error(|error: std::io::Error| async move {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Unhandled internal error: {}", error),
-                    )
-                }),
-        )
         .route("/client", get(client_ws_handler))
         .route("/server", get(server_ws_handler))
+        .fallback_service(serve_dir)
         .layer(Extension((tx, pool)))
         .layer(TraceLayer::new_for_http());
 
     println!("Listening on: {}", addr);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    axum::serve(listener, app).await?;
 
     Ok(())
 }
@@ -161,7 +163,7 @@ async fn accept_server_connection(
                 .to_string(),
             );
 
-            if app == "" {
+            if app.is_empty() {
                 last_time = None
             } else {
                 sqlx::query!(
