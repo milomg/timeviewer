@@ -84,11 +84,11 @@ export const Graph: Component = () => {
         <g>
           <For each={timeList()}>
             {(el) => {
-              let startPos = () => round(transform(el.starttime - startOfDay));
+              let startPos = () => round(transform(el.starttime.getTime() - startOfDay));
 
               let width = () =>
                 round(
-                  transform((el.endtime ?? currentMillis()) - el.starttime),
+                  transform((el.endtime?.getTime() ?? currentMillis()) - el.starttime.getTime()),
                 );
               let fill = `hsl(${hashcode(el.title) % 360},100%,80%)`;
               let border = `hsl(${hashcode(el.app) % 360},100%,40%)`;
@@ -97,7 +97,7 @@ export const Graph: Component = () => {
                 <Show
                   when={
                     el.endtime == undefined ||
-                    transform(el.endtime - currentMillis()) + translate() > 0
+                    transform(el.endtime?.getTime() - currentMillis()) + translate() > 0
                   }
                 >
                   <g transform={`translate(${startPos()},0)`}>

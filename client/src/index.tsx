@@ -84,6 +84,11 @@ const App: ParentComponent = (props) => {
       }
     };
     ws.onclose = () => {
+      let current = timeList().slice();
+      if (current[current.length - 1]) {
+        current[current.length - 1].endtime = new Date();
+        setTimeList(current);
+      }
       setTimeout(setup, 1000);
     };
   };

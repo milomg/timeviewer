@@ -44,6 +44,15 @@ const tableGroupStyles = css({
   flexDirection: "column",
 });
 
+const imgRow = css({
+  display: "flex",
+  alignItems: "center",
+  img: {
+    marginRight: "0.25rem",
+    borderRadius: "0.25rem",
+  },
+});
+
 export const Table: Component = () => {
   const timeList = useContext(TimeListContext);
   const [slowMillis, setSlowMillis] = createSignal(Date.now());
@@ -68,7 +77,7 @@ export const Table: Component = () => {
           obj[mapped] = { mapped, time, setTime, add: 0 };
         }
         if (!s.endtime) continue;
-        obj[mapped].add += s.endtime - s.starttime;
+        obj[mapped].add += s.endtime.getTime() - s.starttime.getTime();
       }
       batch(() => {
         for (const site in obj) obj[site].setTime(obj[site].add);
@@ -86,8 +95,8 @@ export const Table: Component = () => {
         if (url)
           sites[url].setTime(
             sites[url].add +
-              (s.endtime ? s.endtime : slowMillis()) -
-              s.starttime,
+              (s.endtime ? s.endtime.getTime() : slowMillis()) -
+              s.starttime.getTime()
           );
       }
       return Object.values(sites).sort((a, b) => b.time() - a.time());
@@ -95,7 +104,7 @@ export const Table: Component = () => {
   };
 
   const websiteObj = reduceToObject(
-    (s) => s && s.url && new URL(s.url).hostname,
+    (s) => s && s.url && new URL(s.url).hostname
   );
   const appObj = reduceToObject((s) => s && s.app);
 
@@ -127,7 +136,17 @@ export const Table: Component = () => {
               {(y) => (
                 <tr>
                   <td>{millistoduration(y.time())}</td>
-                  <td>{y.mapped}</td>
+                  <td class={imgRow}>
+                    <img
+                      src={
+                        "http://www.google.com/s2/favicons?sz=64&domain=" +
+                        y.mapped
+                      }
+                      width={18}
+                      height={18}
+                    />
+                    {y.mapped}
+                  </td>
                 </tr>
               )}
             </For>

@@ -1,6 +1,6 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use axum::{
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade},
     handler::HandlerWithoutStateExt,
     http::StatusCode,
     response::IntoResponse,
@@ -12,9 +12,20 @@ use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
-use std::net::SocketAddr;
-use tokio::sync::broadcast::{self, Sender};
-use tower_http::{services::ServeDir, trace::TraceLayer};
+use std::{
+    borrow::Cow,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::{
+    sync::broadcast::{self, Sender},
+    time, try_join,
+};
+use tower_http::{
+    services::{ServeDir, ServeFile},
+    trace::TraceLayer,
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -33,27 +44,42 @@ struct NetworkMessageThing {
     url: Option<String>,
 }
 
+#[derive(Clone)]
+struct State {
+    tx: Sender<String>,
+    pool: Pool<Sqlite>,
+    last_time: Arc<Mutex<Option<String>>>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
             std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "timeviewer=debug,tower_http=debug".into()),
+                .as_deref()
+                .unwrap_or("timeviewer=debug,tower_http=debug"),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 5168));
 
-    let pool = SqlitePoolOptions::new().connect("sqlite:tmp.db").await?;
+    let pool = SqlitePoolOptions::new()
+        .connect(
+            std::env::var("DATABASE_URL")
+                .as_deref()
+                .unwrap_or("sqlite:tmp.db"),
+        )
+        .await?;
     sqlx::migrate!().run(&pool).await?;
 
     let (tx, _) = broadcast::channel::<String>(16);
-    // Create the event loop and TCP listener we'll accept connections on.
 
     async fn handle_404() -> (StatusCode, &'static str) {
         (StatusCode::NOT_FOUND, "Not found")
     }
+
+    let last_time_r: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     let serve_dir = ServeDir::new("public")
         .append_index_html_on_directories(true)
@@ -61,8 +87,13 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/client", get(client_ws_handler))
         .route("/server", get(server_ws_handler))
+        .route_service("/graph", ServeFile::new("public/index.html"))
         .fallback_service(serve_dir)
-        .layer(Extension((tx, pool)))
+        .layer(Extension(State {
+            tx,
+            pool,
+            last_time: last_time_r,
+        }))
         .layer(TraceLayer::new_for_http());
 
     println!("Listening on: {}", addr);
@@ -75,45 +106,66 @@ async fn main() -> Result<()> {
 
 async fn client_ws_handler(
     ws: WebSocketUpgrade,
-    Extension((tx, pool)): Extension<(Sender<String>, Pool<Sqlite>)>,
+    Extension(state): Extension<State>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| async move {
-        accept_client_connection(socket, pool.clone(), tx.clone())
-            .await
-            .unwrap()
+    ws.on_upgrade(move |mut socket| async move {
+        if let Err(err) = accept_client_connection(&mut socket, state.clone()).await {
+            tracing::error!("Error handling client connection: {:?}", err);
+            if let Err(e) = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: close_code::ERROR,
+                    reason: Cow::Borrowed("Internal server error"),
+                })))
+                .await
+            {
+                tracing::error!("Error sending close frame: {:?}", e);
+                // can ignore this
+            }
+        }
     })
 }
 
 async fn server_ws_handler(
     ws: WebSocketUpgrade,
-    Extension((tx, pool)): Extension<(Sender<String>, Pool<Sqlite>)>,
+    Extension(state): Extension<State>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|socket| async move {
-        accept_server_connection(socket, pool.clone(), tx.clone())
-            .await
-            .unwrap()
+    ws.on_upgrade(move |mut socket| async move {
+        if let Err(err) = accept_server_connection(&mut socket, state.clone()).await {
+            tracing::error!("Error handling server connection: {:?}", err);
+            if let Err(e) = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: close_code::ERROR,
+                    reason: Cow::Borrowed("Internal server error"),
+                })))
+                .await
+            {
+                tracing::error!("Error sending close frame: {:?}", e);
+                // can ignore this
+            }
+        }
     })
 }
 
 async fn accept_client_connection(
-    mut stream: WebSocket,
-    pool: Pool<Sqlite>,
-    tx: Sender<String>,
+    stream: &mut WebSocket,
+    State {
+        pool,
+        tx,
+        last_time,
+    }: State,
 ) -> Result<()> {
     let mut rx = tx.subscribe();
 
-    let asdf = Local::now()
-        .with_hour(8)
-        .unwrap()
-        .with_minute(0)
-        .unwrap()
-        .with_second(0)
-        .unwrap()
-        .with_nanosecond(0)
-        .unwrap();
-    let hour = asdf.to_rfc3339();
+    let hour = Some(Local::now())
+        .map(|x| x - chrono::Duration::hours(8))
+        .and_then(|x| x.with_hour(8))
+        .and_then(|x| x.with_minute(0))
+        .and_then(|x| x.with_second(0))
+        .and_then(|x| x.with_nanosecond(0))
+        .ok_or_else(|| anyhow!("Failed to create time at 8:00am"))?
+        .to_rfc3339();
 
-    let last_hour = sqlx::query_as!(
+    let mut last_hour = sqlx::query_as!(
             TimeEvent,
             "SELECT * FROM times WHERE datetime(endtime) > datetime(?) or endtime IS NULL ORDER BY starttime",
             hour
@@ -121,7 +173,14 @@ async fn accept_client_connection(
         .fetch_all(&pool)
         .await?;
 
-    let stringified = serde_json::to_string(&last_hour).expect("stringifying failed");
+    let last_time = last_time.lock().map_err(|_| anyhow!("Poisoned"))?.clone();
+    if let (Some(time), Some(last)) = (last_time.clone(), last_hour.last_mut()) {
+        if last.starttime == time {
+            last.endtime = None;
+        }
+    }
+
+    let stringified = serde_json::to_string(&last_hour)?;
     stream.send(Message::Text(stringified)).await?;
 
     while let Ok(data) = rx.recv().await {
@@ -131,16 +190,23 @@ async fn accept_client_connection(
     Ok(())
 }
 
-async fn accept_server_connection(
-    mut stream: WebSocket,
-    pool: Pool<Sqlite>,
-    tx: Sender<String>,
+async fn message_loop(
+    stream: &mut WebSocket,
+    State {
+        pool,
+        tx,
+        last_time,
+    }: State,
 ) -> Result<()> {
-    let mut last_time: Option<String> = None;
     while let Some(msg) = stream.next().await {
         if let Ok(Message::Text(str)) = msg {
-            if let Some(time) = &last_time {
-                let new_time = Utc::now().to_rfc3339();
+            let update_time = {
+                let mut lock = last_time.lock().map_err(|_| anyhow!("Poisoned"))?;
+                (*lock).take()
+            };
+            let new_time = Utc::now().to_rfc3339();
+            let starttime = new_time.clone();
+            if let Some(time) = update_time {
                 sqlx::query!(
                     "UPDATE times SET endtime = ? WHERE starttime = ?",
                     new_time,
@@ -150,8 +216,7 @@ async fn accept_server_connection(
                 .await?;
             }
 
-            let starttime = Utc::now().to_rfc3339();
-            let NetworkMessageThing { app, title, url } = serde_json::from_str(&str).unwrap();
+            let NetworkMessageThing { app, title, url } = serde_json::from_str(&str)?;
 
             let _ = tx.send(
                 json!({
@@ -164,24 +229,34 @@ async fn accept_server_connection(
             );
 
             if app.is_empty() {
-                last_time = None
+                {
+                    let mut o = last_time.lock().map_err(|_| anyhow!("Poisoned"))?;
+                    *o = None;
+                }
             } else {
+                {
+                    let mut o = last_time.lock().map_err(|_| anyhow!("Poisoned"))?;
+                    *o = Some(starttime.clone());
+                }
                 sqlx::query!(
-                    "INSERT INTO times (app, title, url, starttime) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO times (app, title, url, starttime, endtime) VALUES (?, ?, ?, ?, ?)",
                     app,
                     title,
                     url,
+                    starttime,
                     starttime
                 )
                 .execute(&pool)
                 .await?;
-
-                last_time = Some(starttime);
             }
         }
     }
 
-    if let Some(time) = &last_time {
+    let update_time = {
+        let mut lock = last_time.lock().map_err(|_| anyhow!("Poisoned"))?;
+        (*lock).take()
+    };
+    if let Some(time) = &update_time {
         let new_time = Utc::now().to_rfc3339();
         sqlx::query!(
             "UPDATE times SET endtime = ? WHERE starttime = ?",
@@ -190,6 +265,55 @@ async fn accept_server_connection(
         )
         .execute(&pool)
         .await?;
+
+        // create an empty event so that the client stops the timer
+        let _ = tx.send(
+            json!({
+                "app": "",
+                "title": "",
+                "url": "",
+                "starttime": new_time
+            })
+            .to_string(),
+        );
+    }
+    Ok(())
+}
+
+async fn time_updater(
+    State {
+        pool,
+        tx: _,
+        last_time,
+    }: State,
+) -> Result<()> {
+    let mut interval = time::interval(Duration::from_secs(10));
+
+    loop {
+        interval.tick().await;
+
+        let last_time = last_time.lock().map_err(|_| anyhow!("Poisoned"))?.clone();
+
+        if let Some(time) = last_time {
+            let new_time = Utc::now().to_rfc3339();
+            sqlx::query!(
+                "UPDATE times SET endtime = ? WHERE starttime = ?",
+                new_time,
+                time
+            )
+            .execute(&pool)
+            .await?;
+        }
+    }
+}
+
+async fn accept_server_connection(stream: &mut WebSocket, state: State) -> Result<()> {
+    let time_updater = tokio::spawn(time_updater(state.clone()));
+
+    let message_loop = message_loop(stream, state.clone());
+
+    if let Err(e) = try_join!(async { time_updater.await? }, message_loop) {
+        tracing::error!("Error in server connection: {:?}", e);
     }
 
     Ok(())

@@ -1,8 +1,8 @@
 import { createContext } from "solid-js";
 
 export type TimeThing = {
-  starttime: number;
-  endtime?: number;
+  starttime: Date;
+  endtime?: Date;
   app: string;
   url?: string;
   title: string;

@@ -188,17 +188,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, WebSocketDelegate {
       self.isConnected = true
     case .disconnected(_, _):
       print("websocket is disconnected")
-      DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
-        print("reconnecting")
-        self.isConnected = false
-        self.reconnect()
-      }
+      self.isConnected = false
+      self.delayedReconnect()
+    case .peerClosed:
+      print("peer closed websocket")
+      self.isConnected = false
+      self.delayedReconnect()
     case .text(let string):
       print("Received text: \(string)")
     case .binary(let data):
       print("Received data: \(data.count)")
     default:
+      print("Other case", event)
       break
+    }
+  }
+
+  func delayedReconnect() {
+    DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+      print("reconnecting")
+
+      self.reconnect()
     }
   }
 
@@ -210,9 +220,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WebSocketDelegate {
     self.socket.delegate = self
     self.socket.connect()
     isConnected = false
-    DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
-      self.reconnect()
-    }
+    self.delayedReconnect()
   }
 
   func applicationDidFinishLaunching(_ aNotification: Notification) {

@@ -6,4 +6,13 @@ export default defineConfig({
   build: {
     target: "esnext",
   },
+  server: {
+    proxy: {
+      "/client": {
+        target: "http://localhost:5168",
+        changeOrigin: true,
+        ws: true,
+      }
+    },
+  }
 });
